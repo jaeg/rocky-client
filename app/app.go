@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/logger"
 )
@@ -41,11 +42,16 @@ func (a *App) Init() {
 
 	logger.Infof("%s Starting", AppName)
 
-	a.serverConn, err = net.Dial("tcp", *serverAddress)
-	if err != nil {
-		logger.Errorf("Error dialing server %s", err.Error())
-		return
+	for {
+		a.serverConn, err = net.Dial("tcp", *serverAddress)
+		if err != nil {
+			logger.Errorf("Error dialing server %s will retry in 5s", err.Error())
+			time.Sleep(time.Second * 5)
+		} else {
+			break
+		}
 	}
+
 }
 
 func (a *App) Run(ctx context.Context) {
