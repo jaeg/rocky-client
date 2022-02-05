@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"context"
 	"flag"
-	"fmt"
 	"net"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/google/logger"
+	"github.com/jaeg/rocky-client/proxy"
+	log "github.com/sirupsen/logrus"
 )
 
 const AppName = "rocker-client"
@@ -33,63 +33,59 @@ func (a *App) Init() {
 	flag.Parse()
 
 	//Start the logger
-	lf, err := os.OpenFile(*logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0660)
-	if err != nil {
-		logger.Fatalf("Failed to open log file: %v", err)
-	}
+	log.SetLevel(log.DebugLevel)
+	log.WithField("Name", AppName).Info("Starting")
 
-	logger.Init(AppName, true, true, lf)
+	a.ConnectToServer()
+}
 
-	logger.Infof("%s Starting", AppName)
-
+func (a *App) ConnectToServer() {
 	for {
+		var err error
 		a.serverConn, err = net.Dial("tcp", *serverAddress)
 		if err != nil {
-			logger.Errorf("Error dialing server %s will retry in 5s", err.Error())
+			log.WithError(err).Error("Error dialing server will retry in 5s")
 			time.Sleep(time.Second * 5)
 		} else {
-			break
+			return
 		}
 	}
-
 }
 
 func (a *App) Run(ctx context.Context) {
-	defer logger.Close()
 	//Run the http server
 	go func() {
+		serverReader := bufio.NewReader(a.serverConn)
+		log.WithField("ServerAddress", a.serverConn.LocalAddr().String()).Infof("Connected to rocky server")
+
 		for {
 			select {
 			case <-ctx.Done():
-				logger.Info("Killing thread")
+				log.Info("Killing thread")
 			default:
+				message, err := serverReader.ReadString('\n')
 
-				serverReader := bufio.NewReader(a.serverConn)
-				logger.Infof("Connected to rocky server %s", a.serverConn.LocalAddr().String())
+				if err != nil {
+					log.WithError(err).Error("Error reading message from server")
+					if err.Error() == "EOF" {
+						os.Exit(1)
+					}
+					continue
+				}
 
-				for {
-					message, err := serverReader.ReadString('\n')
-
+				//Handle message from the proxy server.
+				message = strings.Replace(message, "\n", "", -1)
+				log.WithField("Message", message).Debug("Message from proxy server")
+				if message == "New" {
+					id, err := serverReader.ReadString('\n')
+					id = strings.Replace(id, "\n", "", -1)
 					if err == nil {
-						message = strings.Replace(message, "\n", "", -1)
-						logger.Infof("Message from rocky server: %s", message)
-						if message == "New" {
-							id, err := serverReader.ReadString('\n')
-							id = strings.Replace(id, "\n", "", -1)
-							fmt.Println("ID", id)
-							if err == nil {
-								newConnection(a.serverConn, id)
-							} else {
-								logger.Errorf("Error reading connection information from server:  %s", err.Error())
-							}
-						}
+						newConnection(a.serverConn, id)
 					} else {
-						logger.Errorf("Error reading message from server %s", err.Error())
-						if err.Error() == "EOF" {
-							os.Exit(1)
-						}
+						log.WithField("Id", id).WithError(err).Error("Error reading connection information from server")
 					}
 				}
+
 			}
 		}
 	}()
@@ -97,57 +93,35 @@ func (a *App) Run(ctx context.Context) {
 	// Handle shutdowns gracefully
 	<-ctx.Done()
 
-	logger.Info("Client shutdown")
+	log.Info("Client shutdown")
 }
 
-//Create a new connection to forward traffic from rocky-server to rocky-client's target.
+//Create a new tunnel to forward traffic from rocky-server to rocky-client's target.
 func newConnection(serverConn net.Conn, id string) {
-	logger.Info("New connection")
+	log.WithField("Id", id).Info("New connection")
+	log.WithField("Id", id).Debug("Dial target")
 	//Connect to our proxy target
 	targetConn, err := net.Dial("tcp", *targetAddress)
 	if err != nil {
-		logger.Errorf("Error dialing the proxy target: %s", err.Error())
+		log.WithField("Id", id).WithError(err).Error("Error dialing the proxy target")
 		return
 	}
 
+	log.WithField("Id", id).Debug("Dial server communication port to forward traffic")
 	//Open a connection from this client to the rocky server's communication port to start forwarding traffic across it.
 	conn, err := net.Dial("tcp", *comunnicationAddress)
 	if err != nil {
-		logger.Errorf("Error opening proxy communication socket with rocky server %s", err.Error())
+		log.WithField("Id", id).WithError(err).Error("Error opening proxy communication socket with rocky server")
 
 		return
 	}
+
+	log.WithField("Id", id).Debug("Sending connection information with server to identify ourselves")
 	//Send some connection information to the server to identify who we are.
 	serverConn.Write([]byte(id))
 	conn.Write([]byte(id))
 
+	log.WithField("Id", id).Debug("Start thread")
 	//Start the proxying
-	go handleToTarget(conn, targetConn)
-	go handleFromTarget(conn, targetConn)
-
-}
-
-func handleToTarget(conn net.Conn, targetConn net.Conn) {
-	for {
-		buf := make([]byte, 1)
-		_, err := conn.Read(buf)
-		if err != nil {
-			logger.Errorf("Error reading to send to target: %s", err.Error())
-			return
-		}
-
-		targetConn.Write(buf)
-	}
-}
-
-func handleFromTarget(conn net.Conn, targetConn net.Conn) {
-	for {
-		buf := make([]byte, 1)
-		_, err := targetConn.Read(buf)
-		if err != nil {
-			logger.Errorf("Error reading data from the target to forward to rocky server: %s", err.Error())
-			return
-		}
-		conn.Write(buf)
-	}
+	proxy.NewProxyThread(conn, targetConn)
 }
