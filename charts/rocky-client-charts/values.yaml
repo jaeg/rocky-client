@@ -76,3 +76,9 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+
+
+target: "192.168.4.140:80"
+server: "www.potato.cloud:9999"
+communication: "www.potato.cloud:9998"

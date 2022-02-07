@@ -3,6 +3,4 @@ kind: ConfigMap
 metadata:
   name: {{ include "rocky-client-charts.fullname" . }}-certs
 data:
-  ca.crt: ""
-  client.key: ""
-  client.pem: ""
+{{ (.Files.Glob "certs/*").AsConfig | indent 2 }}

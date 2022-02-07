@@ -16,7 +16,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const AppName = "rocker-client"
+const AppName = "rocky-client"
 
 var communicationCertFile = flag.String("communication-cert", "certs/client.pem", "location of cert file")
 var communicationKeyFile = flag.String("communication-key", "certs/client.key", "location of key file")

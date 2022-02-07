@@ -4,3 +4,4 @@
 logs.txt
 .DS_Store
 /certs
+/charts/rocky-client-charts/certs

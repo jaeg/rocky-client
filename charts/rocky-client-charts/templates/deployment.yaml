@@ -33,7 +33,7 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: ["--target","192.168.4.140:80", "--server","www.potato.cloud:9999", "--proxy", "www.potato.cloud:9998"]
+          args: ["--target","{{.Values.target}}", "--server","{{.Values.server}}", "--proxy", "{{.Values.communication}}"]
           ports:
             - name: http
               containerPort: 8090
