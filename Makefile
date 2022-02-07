@@ -62,3 +62,4 @@ update-go-deps:
 ifneq (,$(wildcard vendor))
 	go mod vendor
 endif
+

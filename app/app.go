@@ -3,7 +3,10 @@ package app
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
+	"io/ioutil"
 	"net"
 	"os"
 	"strings"
@@ -15,13 +18,13 @@ import (
 
 const AppName = "rocker-client"
 
-var certFile = flag.String("cert-file", "", "location of cert file")
-var keyFile = flag.String("key-file", "", "location of key file")
-var logPath = flag.String("log-path", "./logs.txt", "Logs location")
+var communicationCertFile = flag.String("communication-cert", "certs/client.pem", "location of cert file")
+var communicationKeyFile = flag.String("communication-key", "certs/client.key", "location of key file")
+var communicationCAFile = flag.String("communication-ca", "certs/ca.crt", "location of ca file")
 
 var targetAddress = flag.String("target", "localhost:8090", "Target address to forward traffic to.")
 var serverAddress = flag.String("server", "localhost:9999", "Server location")
-var comunnicationAddress = flag.String("proxy", "localhost:9998", "Port the proxy connection takes place on.")
+var tunnelAddress = flag.String("proxy", "localhost:9998", "Port the proxy connection takes place on.")
 
 type App struct {
 	connections map[string]net.Conn
@@ -42,7 +45,29 @@ func (a *App) Init() {
 func (a *App) ConnectToServer() {
 	for {
 		var err error
-		a.serverConn, err = net.Dial("tcp", *serverAddress)
+
+		if *communicationCertFile != "" {
+			caCert, err := ioutil.ReadFile(*communicationCAFile)
+			if err != nil {
+				log.Fatal(err)
+			}
+			caCertPool := x509.NewCertPool()
+			caCertPool.AppendCertsFromPEM(caCert)
+
+			cer, _ := tls.LoadX509KeyPair(*communicationCertFile, *communicationKeyFile)
+
+			config := &tls.Config{Certificates: []tls.Certificate{cer}, RootCAs: caCertPool, InsecureSkipVerify: false}
+			a.serverConn, err = tls.Dial("tcp", *serverAddress, config)
+			if err != nil {
+				log.WithError(err).Error("Error opening proxy communication socket with rocky server")
+			}
+		} else {
+			a.serverConn, err = net.Dial("tcp", *serverAddress)
+			if err != nil {
+				log.WithError(err).Error("Error opening server communication socket with rocky server")
+			}
+		}
+
 		if err != nil {
 			log.WithError(err).Error("Error dialing server will retry in 5s")
 			time.Sleep(time.Second * 5)
@@ -107,13 +132,34 @@ func newConnection(serverConn net.Conn, id string) {
 		return
 	}
 
-	log.WithField("Id", id).Debug("Dial server communication port to forward traffic")
+	log.WithField("Id", id).Debug("Dial server tunnel port to forward traffic")
 	//Open a connection from this client to the rocky server's communication port to start forwarding traffic across it.
-	conn, err := net.Dial("tcp", *comunnicationAddress)
-	if err != nil {
-		log.WithField("Id", id).WithError(err).Error("Error opening proxy communication socket with rocky server")
+	var conn net.Conn
+	if *communicationCertFile != "" {
+		caCert, err := ioutil.ReadFile(*communicationCAFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		caCertPool := x509.NewCertPool()
+		caCertPool.AppendCertsFromPEM(caCert)
 
-		return
+		cer, _ := tls.LoadX509KeyPair(*communicationCertFile, *communicationKeyFile)
+
+		config := &tls.Config{Certificates: []tls.Certificate{cer}, RootCAs: caCertPool, InsecureSkipVerify: false}
+		conn, err = tls.Dial("tcp", *tunnelAddress, config)
+		if err != nil {
+			log.WithField("Id", id).WithError(err).Error("Error opening proxy communication socket with rocky server")
+
+			return
+		}
+
+	} else {
+		conn, err = net.Dial("tcp", *tunnelAddress)
+		if err != nil {
+			log.WithField("Id", id).WithError(err).Error("Error opening proxy communication socket with rocky server")
+
+			return
+		}
 	}
 
 	log.WithField("Id", id).Debug("Sending connection information with server to identify ourselves")
@@ -123,5 +169,5 @@ func newConnection(serverConn net.Conn, id string) {
 
 	log.WithField("Id", id).Debug("Start thread")
 	//Start the proxying
-	proxy.NewProxyThread(conn, targetConn)
+	proxy.NewProxyThread(id, conn, targetConn)
 }
